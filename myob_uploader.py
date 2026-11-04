@@ -32,6 +32,9 @@ from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import formatdate, make_msgid
 
+from updates import check_for_update, install_update
+from version import VERSION
+
 DATA = Path(__file__).resolve().parent / "data"
 API_URL = "https://api.smtp2go.com/v3/email/send"
 ACTIVITY_URL = "https://api.smtp2go.com/v3/activity/search"
@@ -388,6 +391,83 @@ def launch(data_dir=DATA, initial_files=()):
     ttk.Label(header, text="MYOB Uploader", style="Title.TLabel").pack(side="left")
     settings_button = ttk.Button(header, text="Settings…", command=lambda: open_settings())
     settings_button.pack(side="right")
+    ttk.Label(header, text=f"v{VERSION}").pack(side="left", padx=(10, 0))
+
+    def check_updates(manual=False):
+        if busy or update_running.get():
+            return
+        update_running.set(True)
+        results = queue.Queue()
+
+        def worker():
+            try:
+                results.put((check_for_update(), None))
+            except (OSError, ValueError) as exc:
+                results.put((None, exc))
+
+        def poll_check():
+            try:
+                tag, error = results.get_nowait()
+            except queue.Empty:
+                root.after(150, poll_check)
+                return
+            show_result(tag, error)
+
+        def show_result(tag, error):
+            if busy or root.grab_current():
+                root.after(500, lambda: show_result(tag, error))
+                return
+            update_running.set(False)
+            if error:
+                if manual:
+                    messagebox.showwarning("Check for updates", f"Could not check GitHub.\n\n{error}", parent=root)
+            elif tag:
+                if messagebox.askyesno("Update available", f"MYOB tools {tag} is available. Install it now?",
+                                       parent=root):
+                    apply_update(tag)
+            elif manual:
+                messagebox.showinfo("Check for updates", f"Version {VERSION} is up to date.", parent=root)
+
+        threading.Thread(target=worker, daemon=True).start()
+        root.after(150, poll_check)
+
+    def apply_update(tag):
+        nonlocal busy
+        busy = True
+        for button in buttons:
+            button.config(state="disabled")
+        upload_status.set(f"Installing {tag}…")
+        results = queue.Queue()
+
+        def worker():
+            try:
+                install_update(tag)
+            except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                results.put(exc)
+            else:
+                results.put(None)
+
+        def poll():
+            nonlocal busy
+            try:
+                error = results.get_nowait()
+            except queue.Empty:
+                root.after(150, poll)
+                return
+            busy = False
+            if error:
+                for button in buttons:
+                    button.config(state="normal")
+                upload_status.set("Update could not be installed")
+                messagebox.showerror("Update failed", str(error), parent=root)
+            else:
+                upload_status.set(f"{tag} installed. Reopen the app to use it.")
+                messagebox.showinfo("Update installed", "Close and reopen MYOB Uploader to use the new version.",
+                                    parent=root)
+
+        threading.Thread(target=worker, daemon=True).start()
+        root.after(150, poll)
+
     ttk.Label(outer, text="Send supplier invoices and receipts to MYOB Uploads.").pack(
         anchor="w", pady=(4, 18))
 
@@ -438,6 +518,14 @@ def launch(data_dir=DATA, initial_files=()):
         tabs.add(sender_tab, text="Verified senders")
         api_tab = ttk.Frame(tabs, padding=12)
         tabs.add(api_tab, text="SMTP2GO")
+        update_tab = ttk.Frame(tabs, padding=12)
+        tabs.add(update_tab, text="Updates")
+        ttk.Label(update_tab, text=f"MYOB tools version {VERSION}").pack(anchor="w")
+        def check_now():
+            dialog.destroy()
+            check_updates(manual=True)
+        ttk.Button(update_tab, text="Check GitHub for updates", command=check_now).pack(
+            anchor="w", pady=(10, 0))
         if os.environ.get("SMTP2GO_API_KEY", "").strip():
             key_status = "The environment variable SMTP2GO_API_KEY takes precedence."
         elif (store.root / "smtp2go.key").is_file():
@@ -714,6 +802,9 @@ def launch(data_dir=DATA, initial_files=()):
     refresh()
     if files:
         show_files()
+    update_running = tk.BooleanVar(value=False)
+    if os.environ.get("MYOB_SKIP_UPDATE_CHECK") != "1":
+        root.after(1200, check_updates)
     root.mainloop()
     store.db.close()
 
@@ -790,6 +881,7 @@ def cli_send(store, args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--version", action="version", version=VERSION)
     parser.add_argument("--data-dir", type=Path, default=DATA,
                         help="Settings, private API key and history folder (default: data beside script)")
     parser.add_argument("--printed-pdf", type=Path, nargs="+",

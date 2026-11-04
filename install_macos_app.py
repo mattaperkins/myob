@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Install a MYOB Uploader launcher in Applications and pin it to the Dock."""
 
+import hashlib
+import os
 from pathlib import Path
 import plistlib
 import secrets
@@ -10,8 +12,24 @@ import shutil
 import subprocess
 import sys
 
+from version import VERSION
+
 
 BUNDLE_ID = "io.github.mattaperkins.myob-uploader"
+
+
+def install_dependencies(project):
+    environment = project / ".venv"
+    python = environment / "bin" / "python"
+    if not python.exists():
+        subprocess.run([sys.executable, "-m", "venv", str(environment)], check=True)
+    requirements = project / "requirements.txt"
+    fingerprint = hashlib.sha256(requirements.read_bytes()).hexdigest()
+    marker = environment / ".myob-requirements"
+    if not marker.exists() or marker.read_text() != fingerprint:
+        subprocess.run([str(python), "-m", "pip", "install", "-r", str(requirements)], check=True)
+        marker.write_text(fingerprint)
+    return python
 
 
 def install_app():
@@ -23,12 +41,13 @@ def install_app():
         if not info.is_file() or plistlib.loads(info.read_bytes()).get("CFBundleIdentifier") != BUNDLE_ID:
             raise SystemExit(f"An unrelated app already exists at {app}.")
 
+    install_dependencies(project)
     executable = contents / "MacOS" / "MYOB Uploader"
     executable.parent.mkdir(parents=True, exist_ok=True)
     resources = contents / "Resources"
     resources.mkdir(exist_ok=True)
     shutil.copyfile(project / "assets" / "Uploader.icns", resources / "Uploader.icns")
-    command = shlex.join([sys.executable, str(project / "myob_uploader.py")])
+    command = shlex.join([sys.executable, str(project / "install_macos_app.py"), "--launch"])
     executable.write_text(f"#!/bin/sh\nexec {command}\n", encoding="utf-8")
     executable.chmod(0o755)
     info.write_bytes(plistlib.dumps({
@@ -38,8 +57,8 @@ def install_app():
         "CFBundleExecutable": executable.name,
         "CFBundleIconFile": "Uploader.icns",
         "CFBundlePackageType": "APPL",
-        "CFBundleVersion": "1",
-        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": VERSION,
+        "CFBundleShortVersionString": VERSION,
     }))
     return app
 
@@ -66,6 +85,10 @@ def pin_to_dock(app):
 def main():
     if sys.platform != "darwin":
         raise SystemExit("The Dock installer requires macOS.")
+    if sys.argv[1:] == ["--launch"]:
+        project = Path(__file__).resolve().parent
+        python = install_dependencies(project)
+        os.execv(python, [str(python), str(project / "myob_uploader.py")])
     app = install_app()
     pin_to_dock(app)
     print(f"Installed and pinned to the Dock: {app}")

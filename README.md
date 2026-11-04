@@ -4,20 +4,21 @@ This directory hosts tools for working with MYOB. Add each tool and its usage he
 
 ## Getting started
 
-Use Python 3.10 or later with Tkinter for the desktop app. On macOS, run these commands from the project directory.
+Use Python 3.10 or later with Tkinter for the desktop app. On macOS, clone the repository and run the installer.
 
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install Pillow tkinterdnd2
-python myob_uploader.py
+git clone https://github.com/mattaperkins/myob.git
+cd myob
+python3 install_macos_app.py
 ```
+
+The installer creates a private Python environment in `.venv/`, installs the dependencies from `requirements.txt`, and adds the app to the Dock. Open **MYOB Uploader** from the Dock. For command-line use, run `.venv/bin/python myob_uploader.py --help`.
 
 On first launch, open **Settings…** and add your company's unique MYOB Uploads address, an SMTP2GO verified sender, and your SMTP2GO API key. Local settings and upload history live in the ignored `data/` directory. Keep credentials and invoice files outside the repository.
 
 ## Install on the macOS Dock
 
-With the same Python environment active, run `python install_macos_app.py`. The installer creates **MYOB Uploader.app** in your personal Applications folder and pins it to the Dock. You can run the installer again after moving the project or changing Python environments. Keep the project directory and Python environment available because the app launches the uploader from there.
+Run `python3 install_macos_app.py` from the project directory. The installer creates **MYOB Uploader.app** in your personal Applications folder and pins it to the Dock. You can run the installer again after moving the project or changing Python environments. Keep the project directory and Python environment available because the app launches the uploader from there. The Dock launcher also installs dependencies when the requirements file changes after an update.
 
 To uninstall, remove **MYOB Uploader** from the Dock and delete `~/Applications/MYOB Uploader.app`.
 
@@ -49,6 +50,14 @@ Use `python3 myob_uploader.py history` to find the history ID and last recorded 
 The desktop uploader checks for **Upload to MYOB** on startup and installs it in the macOS Print dialog’s **PDF** menu if missing. You can also run `python3 install_print_workflow.py` manually. Use the same Python you use to run the uploader. From an app that supports printing, choose **Print → PDF → Upload to MYOB**. The uploader opens with a temporary copy of the printed PDF selected. Choose the company and confirm the upload as usual. Closing the uploader removes the temporary copy. Successful sends use the normal monthly archive.
 
 If you move this project or change Python installations, delete `~/Library/PDF Services/Upload to MYOB.app` and reopen the uploader to recreate it.
+
+## Versions and updates
+
+All tools in this repository share the semantic version in `version.py`. The uploader displays it in the title area and with `--version`.
+
+The desktop app checks for a published GitHub release when it starts. You can also check under **Settings… → Updates**. When a newer release is available, the app asks before installing it. Installation advances a clean Git checkout on `main` to the release tag and requires that the tag be a descendant of the current commit. Reopen the app after installation. Local credentials and upload history stay in `data/`. Source archives can check for updates and need to be replaced manually. Set `MYOB_SKIP_UPDATE_CHECK=1` to skip the startup check.
+
+To publish a release, update `VERSION`, commit and push the changes, then create a GitHub release with the matching tag (for example, `v1.1.0`). A tag by itself does not trigger the app’s update prompt.
 
 ## License
 
