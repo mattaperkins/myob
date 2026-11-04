@@ -1,0 +1,14 @@
+/data/
+/codex-resume.sh
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.sqlite*
+*.pdf
+*.eml
