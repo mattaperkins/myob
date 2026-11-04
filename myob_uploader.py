@@ -312,10 +312,12 @@ def write_archive_pdf(path, msg, stream):
         pages[0].save(stream, format="PDF", save_all=True, append_images=pages[1:])
 
 
-def send_batch(store, company, batch, api_key, log):
+def send_batch(store, company, batch, api_key, log, progress=None):
     if not api_key or not api_key.startswith("api-") or any(c.isspace() for c in api_key):
         raise ValueError("Enter a valid SMTP2GO API key.")
     for path, digest, msg in batch:
+        if progress:
+            progress(path, "Uploading…")
         folder = Path.home() / "Documents" / "myob" / date.today().strftime("%m-%Y")
         folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         target = folder / f"{path.stem[:40]}-{uuid4().hex}.pdf"
@@ -351,7 +353,13 @@ def send_batch(store, company, batch, api_key, log):
                 staged.unlink(missing_ok=True)
         upload_id = store.db.execute("SELECT id FROM uploads WHERE destination=? AND digest=?",
                                      (company["email"].lower(), digest)).fetchone()[0]
-        check_delivery(store, upload_id, api_key, log, poll=True)
+        if progress:
+            progress(path, "Checking delivery…")
+        delivery = check_delivery(store, upload_id, api_key, log, poll=True)
+        if progress:
+            status = {"delivered": "Confirmed delivered", "hard-bounced": "Delivery failed",
+                      "rejected": "Delivery failed"}.get(delivery, "Delivery pending")
+            progress(path, status)
 
 
 def launch(data_dir=DATA, initial_files=()):
@@ -380,6 +388,10 @@ def launch(data_dir=DATA, initial_files=()):
     root.geometry("780x640")
     root.minsize(590, 500)
     style = ttk.Style(root)
+    if sys.platform == "darwin":
+        # Use Tk-drawn controls so the full visible button is its hit area.
+        style.theme_use("clam")
+        style.configure("TButton", padding=(12, 7))
     style.configure("Title.TLabel", font=("TkDefaultFont", 24, "bold"))
     style.configure("Section.TLabel", font=("TkDefaultFont", 12, "bold"))
     style.configure("Action.TButton", padding=(12, 6))
@@ -643,6 +655,7 @@ def launch(data_dir=DATA, initial_files=()):
                 messagebox.showerror("Save settings", str(exc), parent=dialog)
                 return
             refresh(company_email)
+            reset_statuses()
             dialog.destroy()
 
         footer = ttk.Frame(panel)
@@ -660,17 +673,60 @@ def launch(data_dir=DATA, initial_files=()):
     file_label = ttk.Label(outer, text="No documents selected")
     file_label.pack(anchor="w", pady=(5, 8))
 
+    states = {}
+    active_path = None
+    log_lines = []
+    log_view = None
+
+    def set_status(path, status):
+        states[path] = status
+        color = ("confirmed" if status == "Confirmed delivered" else
+                 "working" if status in ("Uploading…", "Checking delivery…", "Delivery pending") else
+                 "neutral" if status == "Skipped duplicate" else "waiting")
+        row = str(files.index(path))
+        file_list.item(row, values=(path.name, status), tags=(color,))
+
     def show_files():
-        file_label.config(text=f"{len(files)} document(s) selected")
-        log.delete("1.0", "end")
-        for path in files:
-            log.insert("end", f"{path.name}\n")
+        file_label.config(text=f"{len(files)} document(s) selected" if files else
+                          "Drop invoices here or choose documents" if TkinterDnD else "Choose documents to upload")
+        file_list.delete(*file_list.get_children())
+        for i, path in enumerate(files):
+            file_list.insert("", "end", iid=str(i))
+            set_status(path, states.get(path, "Ready"))
+
+    def append_log(line):
+        log_lines.append(line)
+        if log_view is not None and log_view.winfo_exists():
+            log_view.configure(state="normal")
+            log_view.insert("end", line + "\n")
+            log_view.see("end")
+            log_view.configure(state="disabled")
+
+    def show_log():
+        nonlocal log_view
+        if log_view is not None and log_view.winfo_exists():
+            log_view.winfo_toplevel().lift()
+            return
+        window = tk.Toplevel(root)
+        window.title("Upload Log")
+        window.geometry("710x400")
+        frame = ttk.Frame(window, padding=12)
+        frame.pack(fill="both", expand=True)
+        log_view = tk.Text(frame, wrap="word", padx=10, pady=10)
+        scrollbar = ttk.Scrollbar(frame, command=log_view.yview)
+        scrollbar.pack(side="right", fill="y")
+        log_view.configure(yscrollcommand=scrollbar.set)
+        log_view.pack(fill="both", expand=True)
+        if log_lines:
+            log_view.insert("end", "\n".join(log_lines) + "\n")
+        log_view.configure(state="disabled")
 
     def choose_files():
         chosen = filedialog.askopenfilenames(parent=root, title="Choose supplier documents", filetypes=[
             ("Supplier documents", "*.pdf *.png *.jpg *.jpeg *.tif *.tiff"), ("All files", "*")])
         if chosen:
             files[:] = [Path(p) for p in chosen]
+            states.clear()
             show_files()
 
     def drop_files(event):
@@ -692,20 +748,32 @@ def launch(data_dir=DATA, initial_files=()):
 
     choose_button = ttk.Button(documents, text="Choose documents…", command=choose_files)
     choose_button.pack(side="right")
-    log_frame = ttk.Frame(outer)
-    log_frame.pack(fill="both", expand=True)
-    log = tk.Text(log_frame, height=8, wrap="word", padx=14, pady=12,
-                  font="TkDefaultFont", undo=False)
-    scrollbar = ttk.Scrollbar(log_frame, command=log.yview)
-    log.configure(yscrollcommand=scrollbar.set)
+    ttk.Button(documents, text="View log", command=show_log).pack(side="right", padx=(0, 8))
+    file_frame = ttk.Frame(outer)
+    file_frame.pack(fill="both", expand=True)
+    style.configure("Treeview", rowheight=28)
+    file_list = ttk.Treeview(file_frame, columns=("file", "status"), show="headings",
+                             selectmode="none")
+    file_list.heading("file", text="Invoice")
+    file_list.heading("status", text="Status")
+    file_list.column("status", width=170, minwidth=155, stretch=False)
+    for tag, color in (("waiting", "#a52b36"), ("working", "#9b5008"),
+                       ("confirmed", "#176b42"), ("neutral", "#535966")):
+        file_list.tag_configure(tag, foreground=color)
+    scrollbar = ttk.Scrollbar(file_frame, command=file_list.yview)
+    file_list.configure(yscrollcommand=scrollbar.set)
     scrollbar.pack(side="right", fill="y")
-    log.pack(side="left", fill="both", expand=True)
-    log.bind("<Key>", lambda event: "break" if not event.state & 0xC else None)
+    file_list.pack(side="left", fill="both", expand=True)
     busy = False
     if TkinterDnD:
-        file_label.config(text="Drop invoices in the box below, or choose documents")
-        log.drop_target_register(DND_FILES)
-        log.dnd_bind("<<Drop>>", drop_files)
+        file_list.drop_target_register(DND_FILES)
+        file_list.dnd_bind("<<Drop>>", drop_files)
+
+    def reset_statuses(event=None):
+        states.clear()
+        show_files()
+
+    company_box.bind("<<ComboboxSelected>>", reset_statuses)
 
     def run():
         nonlocal busy
@@ -720,11 +788,15 @@ def launch(data_dir=DATA, initial_files=()):
             store.config["smtp2go"] = settings
             store.save()
             batch, skipped = build_batch(store, company, files)
-            log.delete("1.0", "end")
+            pending = {path for path, _, _ in batch}
+            for path in files:
+                if path not in pending and states.get(path) in (None, "Ready"):
+                    set_status(path, "Skipped duplicate")
             for name in skipped:
-                log.insert("end", f"Skipped duplicate: {name}\n")
+                append_log(f"Skipped duplicate: {name}")
             if not batch:
-                log.insert("end", "No new documents to send.\n")
+                upload_status.set("No new documents to send")
+                append_log("No new documents to send.")
                 return
             if not messagebox.askyesno("Confirm company", f"Send {len(batch)} document(s) to:\n\n"
                         f"{company['name']}\n{company['email']}\n\n"
@@ -751,7 +823,9 @@ def launch(data_dir=DATA, initial_files=()):
                     worker_store = Store(store.root)
                     # Use the reviewed settings even if another instance edits its config.
                     worker_store.config["smtp2go"] = settings
-                    send_batch(worker_store, company, batch, api_key, lambda line: events.put(("log", line)))
+                    send_batch(worker_store, company, batch, api_key,
+                               lambda line: events.put(("log", line)),
+                               lambda path, status: events.put(("progress", (path, status))))
                     events.put(("done", "Delivery checks finished. See each document’s status above.\n"
                                           "API acceptance does not confirm MYOB has imported the documents."))
                 except Exception as exc:
@@ -761,15 +835,19 @@ def launch(data_dir=DATA, initial_files=()):
                         worker_store.db.close()
 
             def poll():
-                nonlocal busy
+                nonlocal busy, active_path
                 while True:
                     try:
                         kind, value = events.get_nowait()
                     except queue.Empty:
                         root.after(100, poll)
                         return
-                    log.insert("end", value + "\n")
-                    log.see("end")
+                    if kind == "progress":
+                        path, status = value
+                        active_path = path if status in ("Uploading…", "Checking delivery…") else None
+                        set_status(path, status)
+                        continue
+                    append_log(value)
                     if kind in ("done", "error"):
                         busy = False
                         for button in buttons:
@@ -778,11 +856,15 @@ def launch(data_dir=DATA, initial_files=()):
                         sender_box.config(state="readonly")
                         upload_status.set("Send stopped" if kind == "error" else "Delivery checks finished")
                         if kind == "error":
+                            if active_path is not None:
+                                set_status(active_path, "Upload stopped")
+                                active_path = None
                             messagebox.showerror("Send stopped", value, parent=root)
                         return
             threading.Thread(target=worker, daemon=True).start()
             root.after(100, poll)
         except Exception as exc:
+            append_log(str(exc))
             messagebox.showerror("Upload", str(exc), parent=root)
 
     actions = ttk.Frame(outer)
@@ -800,8 +882,7 @@ def launch(data_dir=DATA, initial_files=()):
             root.destroy()
     root.protocol("WM_DELETE_WINDOW", close)
     refresh()
-    if files:
-        show_files()
+    show_files()
     update_running = tk.BooleanVar(value=False)
     if os.environ.get("MYOB_SKIP_UPDATE_CHECK") != "1":
         root.after(1200, check_updates)

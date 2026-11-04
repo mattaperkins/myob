@@ -62,3 +62,5 @@ To publish a release, update `VERSION`, commit and push the changes, then create
 ## License
 
 GNU General Public License, version 3 or later. See [LICENSE](LICENSE).
+
+The upload list shows each invoice’s status. Red marks invoices ready to send or stopped by an error. Orange marks uploading, delivery checks and pending delivery. Green means SMTP2GO confirmed that MYOB’s mail server accepted the email. Click **View log** for the detailed activity.
