@@ -15,6 +15,12 @@ python myob_uploader.py
 
 On first launch, open **Settings…** and add your company's unique MYOB Uploads address, an SMTP2GO verified sender, and your SMTP2GO API key. Local settings and upload history live in the ignored `data/` directory. Keep credentials and invoice files outside the repository.
 
+## Install on the macOS Dock
+
+With the same Python environment active, run `python install_macos_app.py`. The installer creates **MYOB Uploader.app** in your personal Applications folder and pins it to the Dock. You can run the installer again after moving the project or changing Python environments. Keep the project directory and Python environment available because the app launches the uploader from there.
+
+To uninstall, remove **MYOB Uploader** from the Dock and delete `~/Applications/MYOB Uploader.app`.
+
 ## Supplier document uploader
 
 `myob_uploader.py` emails supplier invoices and other documents to a company's MYOB Uploads address through SMTP2GO.
