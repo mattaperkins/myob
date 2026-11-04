@@ -396,12 +396,34 @@ def launch(data_dir=DATA, initial_files=()):
     style.configure("Section.TLabel", font=("TkDefaultFont", 12, "bold"))
     style.configure("Action.TButton", padding=(12, 6))
 
+    class Button(ttk.Button):
+        """Use the whole widget for mouse clicks, including its padding."""
+
+        def __init__(self, parent, **kwargs):
+            super().__init__(parent, **kwargs)
+            self.bind("<ButtonPress-1>", self.press)
+            self.bind("<ButtonRelease-1>", self.release)
+
+        def press(self, event):
+            if not self.instate(["disabled"]):
+                self.state(["pressed"])
+            return "break"
+
+        def release(self, event):
+            pressed = self.instate(["pressed"])
+            self.state(["!pressed"])
+            if (pressed and not self.instate(["disabled"])
+                    and 0 <= event.x < self.winfo_width()
+                    and 0 <= event.y < self.winfo_height()):
+                self.invoke()
+            return "break"
+
     outer = ttk.Frame(root, padding=(26, 22))
     outer.pack(fill="both", expand=True)
     header = ttk.Frame(outer)
     header.pack(fill="x")
     ttk.Label(header, text="MYOB Uploader", style="Title.TLabel").pack(side="left")
-    settings_button = ttk.Button(header, text="Settings…", command=lambda: open_settings())
+    settings_button = Button(header, text="Settings…", command=lambda: open_settings())
     settings_button.pack(side="right")
     ttk.Label(header, text=f"v{VERSION}").pack(side="left", padx=(10, 0))
 
@@ -536,7 +558,7 @@ def launch(data_dir=DATA, initial_files=()):
         def check_now():
             dialog.destroy()
             check_updates(manual=True)
-        ttk.Button(update_tab, text="Check GitHub for updates", command=check_now).pack(
+        Button(update_tab, text="Check GitHub for updates", command=check_now).pack(
             anchor="w", pady=(10, 0))
         if os.environ.get("SMTP2GO_API_KEY", "").strip():
             key_status = "The environment variable SMTP2GO_API_KEY takes precedence."
@@ -595,7 +617,7 @@ def launch(data_dir=DATA, initial_files=()):
             controls = ttk.Frame(tab)
             controls.pack(fill="x", pady=(8, 0))
             for action in ("Add", "Edit", "Remove"):
-                ttk.Button(controls, text=action, command=lambda action=action: change(action)).pack(
+                Button(controls, text=action, command=lambda action=action: change(action)).pack(
                     side="left", padx=(0, 6))
             populate(0)
 
@@ -660,8 +682,8 @@ def launch(data_dir=DATA, initial_files=()):
 
         footer = ttk.Frame(panel)
         footer.pack(fill="x", pady=(14, 0))
-        ttk.Button(footer, text="Save settings", command=save_settings).pack(side="right")
-        ttk.Button(footer, text="Cancel", command=dialog.destroy).pack(side="right", padx=8)
+        Button(footer, text="Save settings", command=save_settings).pack(side="right")
+        Button(footer, text="Cancel", command=dialog.destroy).pack(side="right", padx=8)
         dialog.wait_visibility()
         dialog.grab_set()
 
@@ -721,13 +743,35 @@ def launch(data_dir=DATA, initial_files=()):
             log_view.insert("end", "\n".join(log_lines) + "\n")
         log_view.configure(state="disabled")
 
+    picker_open = False
+
     def choose_files():
-        chosen = filedialog.askopenfilenames(parent=root, title="Choose supplier documents", filetypes=[
-            ("Supplier documents", "*.pdf *.png *.jpg *.jpeg *.tif *.tiff"), ("All files", "*")])
-        if chosen:
-            files[:] = [Path(p) for p in chosen]
-            states.clear()
-            show_files()
+        nonlocal picker_open
+        if busy or picker_open:
+            return
+        picker_open = True
+
+        def open_picker():
+            nonlocal picker_open
+            try:
+                if busy:
+                    return
+                # Let the button release finish before Tk starts the native modal panel.
+                root.lift()
+                root.focus_force()
+                chosen = filedialog.askopenfilenames(
+                    parent=root, title="Choose supplier documents", filetypes=[
+                        ("Supplier documents", "*.pdf *.png *.jpg *.jpeg *.tif *.tiff"),
+                        ("All files", "*"),
+                    ])
+                if chosen:
+                    files[:] = [Path(p) for p in chosen]
+                    states.clear()
+                    show_files()
+            finally:
+                picker_open = False
+
+        root.after_idle(open_picker)
 
     def drop_files(event):
         if busy:
@@ -746,9 +790,9 @@ def launch(data_dir=DATA, initial_files=()):
         show_files()
         return COPY
 
-    choose_button = ttk.Button(documents, text="Choose documents…", command=choose_files)
+    choose_button = Button(documents, text="Choose documents…", command=choose_files)
     choose_button.pack(side="right")
-    ttk.Button(documents, text="View log", command=show_log).pack(side="right", padx=(0, 8))
+    Button(documents, text="View log", command=show_log).pack(side="right", padx=(0, 8))
     file_frame = ttk.Frame(outer)
     file_frame.pack(fill="both", expand=True)
     style.configure("Treeview", rowheight=28)
@@ -871,7 +915,7 @@ def launch(data_dir=DATA, initial_files=()):
     actions.pack(fill="x", pady=(14, 0))
     upload_status = tk.StringVar(value="PDF copies are saved to your monthly archive.")
     ttk.Label(actions, textvariable=upload_status).pack(side="left")
-    send_button = ttk.Button(actions, text="Upload to MYOB…", command=run, style="Action.TButton")
+    send_button = Button(actions, text="Upload to MYOB…", command=run, style="Action.TButton")
     send_button.pack(side="right")
     buttons = [settings_button, choose_button, send_button]
 
